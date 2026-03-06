@@ -9,6 +9,38 @@ const BASE = "https://agents.pinai.tech/api";
 
 const bot = new TelegramBot(TG_TOKEN, { polling: true });
 
+// ── Target agents untuk auto kirim ─────────────────────────
+const TARGET_AGENTS = [
+  { id: "Berlin Jr-3d6256", name: "Berlin Jr" },
+  { id: "chadel agent-dccd66", name: "chadel agent" },
+  { id: "TiM_Robot_V2-31ddc2", name: "TiM_Robot_V2" },
+  { id: "thirdyAgent2-5dfce3", name: "thirdyAgent2" },
+  { id: "Rally-Tax-AI-d1c12e", name: "Rally-Tax-AI" },
+];
+
+// ── Pesan otomatis yang dikirim bergiliran ──────────────────
+const AUTO_MESSAGES = [
+  "Hello! agent student checking in. How are you?",
+  "Hi! Any interesting updates today?",
+  "Hey! agent student here. What can you do?",
+  "Good day! Share something interesting with me!",
+  "Hello again! agent student wants to learn more.",
+  "Hi there! What skills do you have today?",
+  "Hey! agent student is exploring AgentHub. Any news?",
+  "Hello! Can you share your latest skill result?",
+];
+
+// ── Auto reply messages ─────────────────────────────────────
+const AUTO_REPLIES = [
+  "Thanks for your message! agent student received it.",
+  "Hello! agent student here. Interesting message!",
+  "Got your message! agent student is learning from this.",
+  "Hi! Thanks for reaching out to agent student.",
+  "Roger that! agent student acknowledges your message.",
+  "Received! agent student is processing your info.",
+];
+
+// ── Helpers ─────────────────────────────────────────────────
 async function agentHub(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -22,167 +54,258 @@ function send(text) {
   return bot.sendMessage(TG_CHAT, text, { parse_mode: "Markdown" });
 }
 
-// ── Heartbeat 15 detik ─────────────────────────────────────
+function randomItem(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ── State ────────────────────────────────────────────────────
 let lastUnread = 0;
-async function heartbeat() {
+let autoSendEnabled = true;
+let autoReplyEnabled = true;
+let cycleCount = 0;
+let totalSent = 0;
+let totalReplied = 0;
+let repliedMessages = new Set(); // track pesan yg sudah dibalas
+
+// ── MAIN LOOP tiap 15 detik ──────────────────────────────────
+async function mainLoop() {
+  cycleCount++;
+  console.log(`\n[${new Date().toLocaleTimeString()}] === CYCLE ${cycleCount} ===`);
+
+  // 1. HEARTBEAT
   try {
-    const data = await agentHub("POST", "/heartbeat", { supports_chat: true });
-    const unread = data.unread_count || 0;
+    const hb = await agentHub("POST", "/heartbeat", { supports_chat: true });
+    const unread = hb.unread_count || 0;
+    console.log(`Heartbeat OK | Unread: ${unread}`);
+
+    // Notif pesan baru ke Telegram
     if (unread > lastUnread) {
-      await send(`PESAN BARU MASUK!\nKamu punya *${unread}* pesan belum dibaca.\nKirim /inbox untuk baca.`);
+      await send(`*PESAN BARU!* ${unread} pesan belum dibaca.\nKirim /inbox untuk lihat.`);
     }
     lastUnread = unread;
-    console.log(`[${new Date().toLocaleTimeString()}] Heartbeat OK | Unread: ${unread}`);
   } catch (e) { console.error("Heartbeat error:", e.message); }
-}
-setInterval(heartbeat, 15000);
-heartbeat();
 
-// ══ SKILL 1: CRYPTO ════════════════════════════════════════
+  // 2. AUTO REPLY - baca inbox dan balas pesan yang belum dibalas
+  if (autoReplyEnabled) {
+    try {
+      const raw = await agentHub("GET", "/messages");
+      const conversations = Array.isArray(raw) ? raw : (raw.conversations || raw.data || []);
+
+      for (const conv of conversations) {
+        const peerId = conv.peer?.id || conv.from;
+        const unreadCount = conv.unread_count || 0;
+        const lastMsgId = conv.last_message?.id;
+
+        if (unreadCount > 0 && peerId && lastMsgId && !repliedMessages.has(lastMsgId)) {
+          // Ambil detail percakapan
+          try {
+            const chat = await agentHub("GET", `/messages/${encodeURIComponent(peerId)}`);
+            const messages = Array.isArray(chat) ? chat : (chat.messages || []);
+            
+            // Balas pesan-pesan yang belum dibalas
+            for (const msg of messages) {
+              if (msg.from !== AGENT_ID && !repliedMessages.has(msg.id)) {
+                const reply = randomItem(AUTO_REPLIES);
+                await agentHub("POST", "/message", { to: peerId, content: reply });
+                repliedMessages.add(msg.id);
+                totalReplied++;
+                console.log(`Auto replied to ${peerId}: "${reply}"`);
+                
+                // Notif ke Telegram
+                await send(`*AUTO BALAS*\nKe: \`${conv.peer?.name || peerId}\`\nBalas: "${reply}"`);
+                
+                // Jangan spam, cukup balas 1 per percakapan per cycle
+                break;
+              }
+            }
+          } catch (e) { console.error(`Reply error for ${peerId}:`, e.message); }
+        }
+      }
+    } catch (e) { console.error("Auto reply error:", e.message); }
+  }
+
+  // 3. AUTO SEND - kirim ke target agents bergiliran
+  if (autoSendEnabled) {
+    try {
+      // Pilih 1 agent target bergiliran berdasarkan cycle
+      const target = TARGET_AGENTS[cycleCount % TARGET_AGENTS.length];
+      const message = randomItem(AUTO_MESSAGES);
+
+      await agentHub("POST", "/message", { to: target.id, content: message });
+      totalSent++;
+      console.log(`Auto sent to ${target.name}: "${message}"`);
+
+      // Notif ke Telegram setiap 5 cycle (biar tidak spam Telegram)
+      if (cycleCount % 5 === 0) {
+        await send(
+          `*AUTO SEND REPORT*\n\n` +
+          `Cycle: ${cycleCount}\n` +
+          `Total terkirim: ${totalSent}\n` +
+          `Total dibalas: ${totalReplied}\n` +
+          `Terakhir kirim ke: ${target.name}`
+        );
+      }
+    } catch (e) { console.error("Auto send error:", e.message); }
+  }
+}
+
+// Jalankan loop tiap 15 detik
+setInterval(mainLoop, 15000);
+mainLoop(); // jalankan langsung saat start
+
+// ══ SKILL COMMANDS ══════════════════════════════════════════
+
 bot.onText(/\/crypto (.+)/, async (msg, match) => {
   const coin = match[1].trim().toLowerCase();
   try {
     const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin}&vs_currencies=usd,idr`);
     const data = await res.json();
     if (!data[coin]) { await send(`Coin *${coin}* tidak ditemukan.\nCoba: bitcoin, ethereum, solana`); return; }
-    const usd = data[coin].usd?.toLocaleString() || "-";
-    const idr = data[coin].idr?.toLocaleString() || "-";
-    await send(`*${coin.toUpperCase()} Price*\n\nUSD: $${usd}\nIDR: Rp${idr}`);
-  } catch (e) { await send("Gagal ambil harga: " + e.message); }
+    await send(`*${coin.toUpperCase()} Price*\n\nUSD: $${data[coin].usd?.toLocaleString()}\nIDR: Rp${data[coin].idr?.toLocaleString()}`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ SKILL 2: JOKE ══════════════════════════════════════════
 bot.onText(/\/joke/, async () => {
   try {
     const res = await fetch("https://v2.jokeapi.dev/joke/Programming,Misc?blacklistFlags=nsfw,explicit");
     const data = await res.json();
-    let text = `*Joke Time!*\n\n`;
-    if (data.type === "single") { text += data.joke; }
-    else { text += `${data.setup}\n\n_${data.delivery}_`; }
-    await send(text);
-  } catch (e) { await send("Gagal ambil joke: " + e.message); }
+    await send(`*Joke!*\n\n${data.type === "single" ? data.joke : `${data.setup}\n\n_${data.delivery}_`}`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ SKILL 3: ADVICE ════════════════════════════════════════
 bot.onText(/\/advice/, async () => {
   try {
     const res = await fetch("https://api.adviceslip.com/advice");
     const data = await res.json();
-    await send(`*Advice of the Day*\n\n"${data.slip.advice}"`);
-  } catch (e) { await send("Gagal ambil advice: " + e.message); }
+    await send(`*Advice*\n\n"${data.slip.advice}"`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ SKILL 4: FUN FACT ══════════════════════════════════════
 bot.onText(/\/fact/, async () => {
   try {
     const res = await fetch("https://uselessfacts.jsph.pl/api/v2/facts/random");
     const data = await res.json();
     await send(`*Fun Fact!*\n\n${data.text}`);
-  } catch (e) { await send("Gagal ambil fact: " + e.message); }
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ SKILL 5: KURS ══════════════════════════════════════════
 bot.onText(/\/kurs (.+) (.+) (.+)/, async (msg, match) => {
-  const amount = match[1].trim();
-  const from = match[2].trim().toUpperCase();
-  const to = match[3].trim().toUpperCase();
+  const [, amount, from, to] = match;
   try {
-    const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${from}`);
+    const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${from.toUpperCase()}`);
     const data = await res.json();
-    const rate = data.rates[to];
-    if (!rate) { await send(`Mata uang *${to}* tidak ditemukan.`); return; }
-    const result = (parseFloat(amount) * rate).toLocaleString();
-    await send(`*Kurs ${from} ke ${to}*\n\n${amount} ${from} = *${result} ${to}*`);
-  } catch (e) { await send("Gagal ambil kurs: " + e.message); }
+    const rate = data.rates[to.toUpperCase()];
+    if (!rate) { await send(`Mata uang tidak ditemukan.`); return; }
+    await send(`*Kurs ${from.toUpperCase()} ke ${to.toUpperCase()}*\n\n${amount} = *${(parseFloat(amount) * rate).toLocaleString()} ${to.toUpperCase()}*`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ AGENT HUB COMMANDS ═════════════════════════════════════
+// ══ KONTROL AUTO dari Telegram ══════════════════════════════
+
+bot.onText(/\/autoon/, async () => {
+  autoSendEnabled = true;
+  autoReplyEnabled = true;
+  await send(`*AUTO MODE: ON*\nAuto kirim + auto balas aktif tiap 15 detik.`);
+});
+
+bot.onText(/\/autooff/, async () => {
+  autoSendEnabled = false;
+  autoReplyEnabled = false;
+  await send(`*AUTO MODE: OFF*\nAuto kirim + auto balas dimatikan.`);
+});
+
+bot.onText(/\/stats/, async () => {
+  await send(
+    `*Statistik Agent Student:*\n\n` +
+    `Cycle berjalan: ${cycleCount}\n` +
+    `Total pesan terkirim: ${totalSent}\n` +
+    `Total pesan dibalas: ${totalReplied}\n` +
+    `Auto send: ${autoSendEnabled ? "ON" : "OFF"}\n` +
+    `Auto reply: ${autoReplyEnabled ? "ON" : "OFF"}\n` +
+    `Unread saat ini: ${lastUnread}`
+  );
+});
+
+// ══ AGENT HUB COMMANDS ══════════════════════════════════════
+
 bot.onText(/\/start/, async () => {
   await send(
     `*Agent Student Bot Aktif!*\n\n` +
-    `*SKILL BARU:*\n` +
-    `/crypto bitcoin - Harga crypto\n` +
+    `*AUTO MODE (tiap 15 detik):*\n` +
+    `/autoon - Nyalakan auto kirim+balas\n` +
+    `/autooff - Matikan auto kirim+balas\n` +
+    `/stats - Lihat statistik\n\n` +
+    `*SKILL:*\n` +
+    `/crypto [coin] - Harga crypto\n` +
     `/joke - Joke random\n` +
-    `/advice - Motivasi harian\n` +
+    `/advice - Motivasi\n` +
     `/fact - Fakta unik\n` +
-    `/kurs 100 USD IDR - Konversi mata uang\n\n` +
+    `/kurs [jml] [dari] [ke] - Kurs\n\n` +
     `*AGENT HUB:*\n` +
-    `/status - Status agent\n` +
-    `/inbox - Baca pesan masuk\n` +
-    `/discover - Lihat agent online\n` +
-    `/send [id] [pesan] - Kirim pesan\n` +
-    `/read [id] - Baca percakapan\n` +
-    `/heartbeat - Ping manual`
+    `/status /inbox /discover\n` +
+    `/send [id] [pesan]\n` +
+    `/read [id] /heartbeat`
   );
 });
 
 bot.onText(/\/help/, async () => {
   await send(
     `*Menu Lengkap:*\n\n` +
+    `*KONTROL AUTO:*\n` +
+    `/autoon - ON auto kirim+balas\n` +
+    `/autooff - OFF auto kirim+balas\n` +
+    `/stats - Statistik lengkap\n\n` +
     `*SKILL:*\n` +
-    `/crypto [coin] - Harga crypto live\n` +
-    `/joke - Joke random\n` +
-    `/advice - Motivasi harian\n` +
-    `/fact - Fakta unik\n` +
-    `/kurs [jml] [dari] [ke] - Konversi kurs\n\n` +
+    `/crypto bitcoin\n` +
+    `/joke /advice /fact\n` +
+    `/kurs 100 USD IDR\n\n` +
     `*AGENT HUB:*\n` +
-    `/status - Status agent\n` +
-    `/inbox - Baca pesan masuk\n` +
-    `/discover - Lihat agent online\n` +
-    `/send [id] [pesan] - Kirim pesan\n` +
-    `/read [id] - Baca percakapan\n` +
-    `/heartbeat - Ping manual`
+    `/status /inbox /discover\n` +
+    `/send [id] [pesan]\n` +
+    `/read [id] /heartbeat`
   );
 });
 
 bot.onText(/\/status/, async () => {
   try {
     const data = await agentHub("GET", `/agents/${encodeURIComponent(AGENT_ID)}`);
-    await send(`*Status Agent Student:*\n\nID: \`${data.id || AGENT_ID}\`\nStatus: *${data.status || "unknown"}*\nRole: ${data.role || "-"}\nSkills: ${data.skills_count || "-"}\nUnread: ${lastUnread} pesan`);
-  } catch (e) { await send("Gagal cek status: " + e.message); }
+    await send(`*Status:*\n\nID: \`${AGENT_ID}\`\nStatus: *${data.status || "unknown"}*\nRole: ${data.role || "-"}\nUnread: ${lastUnread}`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
 bot.onText(/\/heartbeat/, async () => {
   try {
     const data = await agentHub("POST", "/heartbeat", { supports_chat: true });
-    await send(`*Heartbeat Terkirim!*\n\nStatus: *${data.status}*\nUnread: ${data.unread_count} pesan\nAuto heartbeat: setiap 15 detik`);
-  } catch (e) { await send("Heartbeat gagal: " + e.message); }
+    await send(`*Heartbeat OK!*\n\nStatus: *${data.status}*\nUnread: ${data.unread_count}\nAuto: tiap 15 detik`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
 bot.onText(/\/inbox/, async () => {
   try {
     const raw = await agentHub("GET", "/messages");
-    const data = Array.isArray(raw) ? raw : (raw.conversations || raw.messages || raw.data || []);
-    if (!data || data.length === 0) {
-      await send(`Inbox kosong.\nTotal unread: *${lastUnread}* pesan.`);
-      return;
-    }
+    const data = Array.isArray(raw) ? raw : (raw.conversations || raw.data || []);
+    if (!data?.length) { await send(`Inbox kosong. Unread: *${lastUnread}*`); return; }
     let msg = `*Inbox (${data.length} percakapan):*\n\n`;
-    data.slice(0, 8).forEach((conv, i) => {
-      const peer = conv.peer?.name || conv.peer?.id || conv.from || "Unknown";
-      const lastMsg = (conv.last_message?.content || conv.content || "-").slice(0, 50);
-      const unread = conv.unread_count || 0;
-      msg += `${i + 1}. *${peer}*${unread > 0 ? ` _(${unread} baru)_` : ""}\n`;
-      msg += `   "${lastMsg}"\n   ID: \`${conv.peer?.id || conv.from || "-"}\`\n\n`;
+    data.slice(0, 8).forEach((c, i) => {
+      const peer = c.peer?.name || c.peer?.id || c.from || "Unknown";
+      const last = (c.last_message?.content || "-").slice(0, 40);
+      msg += `${i + 1}. *${peer}* ${c.unread_count > 0 ? `_(${c.unread_count} baru)_` : ""}\n   "${last}"\n   \`${c.peer?.id || "-"}\`\n\n`;
     });
-    msg += `_/read [id] untuk baca percakapan_`;
     await send(msg);
-  } catch (e) { await send("Gagal ambil inbox: " + e.message); }
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
 bot.onText(/\/read (.+)/, async (msg, match) => {
   const peerId = match[1].trim();
   try {
     const data = await agentHub("GET", `/messages/${encodeURIComponent(peerId)}`);
-    if (!data || !data.length) { await send("Tidak ada percakapan dengan agent ini."); return; }
+    if (!data?.length) { await send("Tidak ada percakapan."); return; }
     let text = `*Chat dengan ${peerId}:*\n\n`;
-    data.slice(-5).forEach((m) => {
-      const from = m.from === AGENT_ID ? "Kamu" : peerId.split("-")[0];
-      const time = new Date(m.created_at).toLocaleTimeString("id-ID");
-      text += `[${time}] *${from}:*\n${m.content}\n\n`;
+    (Array.isArray(data) ? data : []).slice(-5).forEach((m) => {
+      text += `*${m.from === AGENT_ID ? "Kamu" : peerId.split("-")[0]}:*\n${m.content}\n\n`;
     });
     await send(text);
-  } catch (e) { await send("Gagal baca chat: " + e.message); }
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
 bot.onText(/\/discover/, async () => {
@@ -191,10 +314,9 @@ bot.onText(/\/discover/, async () => {
     const agents = data.agents || [];
     if (!agents.length) { await send("Tidak ada agent online."); return; }
     let msg = `*Agent Online (${agents.length}):*\n\n`;
-    agents.forEach((a, i) => { msg += `${i + 1}. *${a.name}*\n   ID: \`${a.id}\`\n\n`; });
-    msg += `_/send [id] [pesan] untuk chat_`;
+    agents.forEach((a, i) => { msg += `${i + 1}. *${a.name}*\n   \`${a.id}\`\n\n`; });
     await send(msg);
-  } catch (e) { await send("Gagal discover: " + e.message); }
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
 bot.onText(/\/send (.+?) (.+)/, async (msg, match) => {
@@ -202,9 +324,9 @@ bot.onText(/\/send (.+?) (.+)/, async (msg, match) => {
   const content = match[2].trim();
   try {
     const data = await agentHub("POST", "/message", { to: targetId, content });
-    await send(`*Pesan Terkirim!*\n\nKe: \`${targetId}\`\nPesan: "${content}"\nStatus: ${data.target_status || "sent"}`);
-  } catch (e) { await send("Gagal kirim pesan: " + e.message); }
+    await send(`*Terkirim!*\nKe: \`${targetId}\`\n"${content}"\nStatus: ${data.target_status || "sent"}`);
+  } catch (e) { await send("Gagal: " + e.message); }
 });
 
-console.log("Bot started with 5 new skills!");
-send("Bot UPDATE berhasil!\n\nSkill baru:\n/crypto bitcoin\n/joke\n/advice\n/fact\n/kurs 100 USD IDR\n\nKetik /help untuk menu lengkap.");
+console.log("Agent Student Bot FULL AUTO started!");
+send("*Agent Student FULL AUTO aktif!*\n\nAuto kirim + Auto balas tiap 15 detik.\n\n/stats untuk lihat statistik\n/autooff untuk matikan\n/help untuk menu lengkap.");
