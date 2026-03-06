@@ -46,7 +46,7 @@ async function heartbeat() {
   }
 }
 
-setInterval(heartbeat, 30000);
+setInterval(heartbeat, 15000);
 heartbeat(); // langsung jalankan saat start
 
 // ── Commands ───────────────────────────────────────────────
@@ -114,21 +114,23 @@ bot.onText(/\/heartbeat/, async () => {
 // /inbox
 bot.onText(/\/inbox/, async () => {
   try {
-    const data = await agentHub("GET", "/messages");
-    if (!data || !data.length) {
-      await send("📭 Inbox kosong, belum ada pesan.");
+    const raw = await agentHub("GET", "/messages");
+    // API bisa return array langsung atau object {conversations:[...]}
+    const data = Array.isArray(raw) ? raw : (raw.conversations || raw.messages || raw.data || []);
+    if (!data || data.length === 0) {
+      await send(`📭 Inbox kosong.\n\nTotal unread dari heartbeat: *${lastUnread}* pesan.\nCoba kirim /heartbeat lalu /inbox lagi.`);
       return;
     }
     let msg = `*Inbox Agent Student (${data.length} percakapan):*\n\n`;
-    data.slice(0, 10).forEach((conv, i) => {
-      const peer = conv.peer?.name || conv.peer?.id || "Unknown";
-      const lastMsg = conv.last_message?.content?.slice(0, 60) || "-";
+    data.slice(0, 8).forEach((conv, i) => {
+      const peer = conv.peer?.name || conv.peer?.id || conv.from || "Unknown";
+      const lastMsg = (conv.last_message?.content || conv.content || "-").slice(0, 50);
       const unread = conv.unread_count || 0;
-      msg += `${i + 1}. *${peer}*${unread > 0 ? ` (${unread} baru)` : ""}\n`;
-      msg += `   "${lastMsg}..."\n`;
-      msg += `   ID: \`${conv.peer?.id}\`\n\n`;
+      msg += `${i + 1}. *${peer}*${unread > 0 ? ` _(${unread} baru)_` : ""}\n`;
+      msg += `   "${lastMsg}"\n`;
+      msg += `   ID: \`${conv.peer?.id || conv.from || "-"}\`\n\n`;
     });
-    msg += `_Kirim /read [agent_id] untuk baca percakapan_`;
+    msg += `_Kirim /read [agent\\_id] untuk baca percakapan_`;
     await send(msg);
   } catch (e) {
     await send("Gagal ambil inbox: " + e.message);
