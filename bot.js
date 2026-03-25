@@ -13,12 +13,12 @@ const bot = new TelegramBot(TG_TOKEN, { polling: true });
 const TARGET_AGENTS = [
   { id: "Berlin Jr-3d6256", name: "Berlin Jr" },
   { id: "chadel agent-dccd66", name: "chadel agent" },
-  { id: "TiM_Robot_V2-31ddc2", name: "TiM_Robot_V2" },
+  { id: "TiM_Robot_V2-31ddc2", name: "TiM Robot V2" },
   { id: "thirdyAgent2-5dfce3", name: "thirdyAgent2" },
-  { id: "Rally-Tax-AI-d1c12e", name: "Rally-Tax-AI" },
+  { id: "Rally-Tax-AI-d1c12e", name: "Rally Tax AI" },
 ];
 
-// ── Pesan otomatis yang dikirim bergiliran ──────────────────
+// ── Pesan otomatis bergiliran ───────────────────────────────
 const AUTO_MESSAGES = [
   "Hello! agent student checking in. How are you?",
   "Hi! Any interesting updates today?",
@@ -28,6 +28,8 @@ const AUTO_MESSAGES = [
   "Hi there! What skills do you have today?",
   "Hey! agent student is exploring AgentHub. Any news?",
   "Hello! Can you share your latest skill result?",
+  "Hi! agent student is active and ready to learn!",
+  "Hey! What is new on AgentHub today?",
 ];
 
 // ── Auto reply messages ─────────────────────────────────────
@@ -38,13 +40,18 @@ const AUTO_REPLIES = [
   "Hi! Thanks for reaching out to agent student.",
   "Roger that! agent student acknowledges your message.",
   "Received! agent student is processing your info.",
+  "Thank you! agent student appreciates the interaction.",
+  "Hello back! agent student is always ready to chat.",
 ];
 
 // ── Helpers ─────────────────────────────────────────────────
 async function agentHub(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_KEY}` },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${API_KEY}`,
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   return res.json();
@@ -65,29 +72,27 @@ let autoReplyEnabled = true;
 let cycleCount = 0;
 let totalSent = 0;
 let totalReplied = 0;
-let repliedMessages = new Set(); // track pesan yg sudah dibalas
+let repliedMessages = new Set();
+let isRunning = false; // cegah overlap jika proses lambat
 
-// ── MAIN LOOP tiap 15 detik ──────────────────────────────────
+// ── MAIN LOOP tiap 5 detik ───────────────────────────────────
 async function mainLoop() {
+  if (isRunning) return; // skip jika cycle sebelumnya belum selesai
+  isRunning = true;
   cycleCount++;
-  console.log(`\n[${new Date().toLocaleTimeString()}] === CYCLE ${cycleCount} ===`);
 
-  // 1. HEARTBEAT
   try {
+    // 1. HEARTBEAT (tiap 5 detik)
     const hb = await agentHub("POST", "/heartbeat", { supports_chat: true });
     const unread = hb.unread_count || 0;
-    console.log(`Heartbeat OK | Unread: ${unread}`);
-
-    // Notif pesan baru ke Telegram
     if (unread > lastUnread) {
       await send(`*PESAN BARU!* ${unread} pesan belum dibaca.\nKirim /inbox untuk lihat.`);
     }
     lastUnread = unread;
-  } catch (e) { console.error("Heartbeat error:", e.message); }
+    console.log(`[${new Date().toLocaleTimeString()}] Cycle ${cycleCount} | Unread: ${unread}`);
 
-  // 2. AUTO REPLY - baca inbox dan balas pesan yang belum dibalas
-  if (autoReplyEnabled) {
-    try {
+    // 2. AUTO REPLY
+    if (autoReplyEnabled && unread > 0) {
       const raw = await agentHub("GET", "/messages");
       const conversations = Array.isArray(raw) ? raw : (raw.conversations || raw.data || []);
 
@@ -97,61 +102,57 @@ async function mainLoop() {
         const lastMsgId = conv.last_message?.id;
 
         if (unreadCount > 0 && peerId && lastMsgId && !repliedMessages.has(lastMsgId)) {
-          // Ambil detail percakapan
           try {
             const chat = await agentHub("GET", `/messages/${encodeURIComponent(peerId)}`);
             const messages = Array.isArray(chat) ? chat : (chat.messages || []);
-            
-            // Balas pesan-pesan yang belum dibalas
+
             for (const msg of messages) {
               if (msg.from !== AGENT_ID && !repliedMessages.has(msg.id)) {
                 const reply = randomItem(AUTO_REPLIES);
                 await agentHub("POST", "/message", { to: peerId, content: reply });
                 repliedMessages.add(msg.id);
                 totalReplied++;
-                console.log(`Auto replied to ${peerId}: "${reply}"`);
-                
-                // Notif ke Telegram
-                await send(`*AUTO BALAS*\nKe: \`${conv.peer?.name || peerId}\`\nBalas: "${reply}"`);
-                
-                // Jangan spam, cukup balas 1 per percakapan per cycle
+                console.log(`Auto replied to ${peerId}`);
+                await send(`*AUTO BALAS*\nKe: *${conv.peer?.name || peerId}*\n"${reply}"`);
                 break;
               }
             }
-          } catch (e) { console.error(`Reply error for ${peerId}:`, e.message); }
+          } catch (e) { console.error(`Reply error:`, e.message); }
         }
       }
-    } catch (e) { console.error("Auto reply error:", e.message); }
-  }
+    }
 
-  // 3. AUTO SEND - kirim ke target agents bergiliran
-  if (autoSendEnabled) {
-    try {
-      // Pilih 1 agent target bergiliran berdasarkan cycle
+    // 3. AUTO SEND (bergiliran tiap cycle)
+    if (autoSendEnabled) {
       const target = TARGET_AGENTS[cycleCount % TARGET_AGENTS.length];
       const message = randomItem(AUTO_MESSAGES);
-
       await agentHub("POST", "/message", { to: target.id, content: message });
       totalSent++;
       console.log(`Auto sent to ${target.name}: "${message}"`);
 
-      // Notif ke Telegram setiap 5 cycle (biar tidak spam Telegram)
-      if (cycleCount % 5 === 0) {
+      // Report ke Telegram tiap 10 cycle (50 detik)
+      if (cycleCount % 10 === 0) {
         await send(
-          `*AUTO SEND REPORT*\n\n` +
+          `*AUTO REPORT (tiap 50 detik)*\n\n` +
           `Cycle: ${cycleCount}\n` +
           `Total terkirim: ${totalSent}\n` +
           `Total dibalas: ${totalReplied}\n` +
-          `Terakhir kirim ke: ${target.name}`
+          `Terakhir kirim ke: *${target.name}*\n` +
+          `Unread saat ini: ${lastUnread}`
         );
       }
-    } catch (e) { console.error("Auto send error:", e.message); }
+    }
+
+  } catch (e) {
+    console.error("Main loop error:", e.message);
   }
+
+  isRunning = false;
 }
 
-// Jalankan loop tiap 15 detik
-setInterval(mainLoop, 15000);
-mainLoop(); // jalankan langsung saat start
+// Jalankan tiap 5 detik
+setInterval(mainLoop, 5000);
+mainLoop();
 
 // ══ SKILL COMMANDS ══════════════════════════════════════════
 
@@ -200,12 +201,12 @@ bot.onText(/\/kurs (.+) (.+) (.+)/, async (msg, match) => {
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
-// ══ KONTROL AUTO dari Telegram ══════════════════════════════
+// ══ KONTROL AUTO ════════════════════════════════════════════
 
 bot.onText(/\/autoon/, async () => {
   autoSendEnabled = true;
   autoReplyEnabled = true;
-  await send(`*AUTO MODE: ON*\nAuto kirim + auto balas aktif tiap 15 detik.`);
+  await send(`*AUTO MODE: ON*\nAuto kirim + auto balas aktif tiap *5 detik*.`);
 });
 
 bot.onText(/\/autooff/, async () => {
@@ -214,10 +215,31 @@ bot.onText(/\/autooff/, async () => {
   await send(`*AUTO MODE: OFF*\nAuto kirim + auto balas dimatikan.`);
 });
 
+bot.onText(/\/sendon/, async () => {
+  autoSendEnabled = true;
+  await send(`*AUTO SEND: ON*\nAuto kirim pesan tiap 5 detik.`);
+});
+
+bot.onText(/\/sendoff/, async () => {
+  autoSendEnabled = false;
+  await send(`*AUTO SEND: OFF*\nAuto kirim dimatikan.`);
+});
+
+bot.onText(/\/replyon/, async () => {
+  autoReplyEnabled = true;
+  await send(`*AUTO REPLY: ON*\nAuto balas pesan masuk aktif.`);
+});
+
+bot.onText(/\/replyoff/, async () => {
+  autoReplyEnabled = false;
+  await send(`*AUTO REPLY: OFF*\nAuto balas dimatikan.`);
+});
+
 bot.onText(/\/stats/, async () => {
   await send(
     `*Statistik Agent Student:*\n\n` +
     `Cycle berjalan: ${cycleCount}\n` +
+    `Waktu aktif: ${Math.floor(cycleCount * 5 / 60)} menit\n` +
     `Total pesan terkirim: ${totalSent}\n` +
     `Total pesan dibalas: ${totalReplied}\n` +
     `Auto send: ${autoSendEnabled ? "ON" : "OFF"}\n` +
@@ -230,31 +252,31 @@ bot.onText(/\/stats/, async () => {
 
 bot.onText(/\/start/, async () => {
   await send(
-    `*Agent Student Bot Aktif!*\n\n` +
-    `*AUTO MODE (tiap 15 detik):*\n` +
-    `/autoon - Nyalakan auto kirim+balas\n` +
-    `/autooff - Matikan auto kirim+balas\n` +
-    `/stats - Lihat statistik\n\n` +
+    `*Agent Student Bot - 5 Detik Mode!*\n\n` +
+    `*KONTROL AUTO:*\n` +
+    `/autoon - ON semua auto\n` +
+    `/autooff - OFF semua auto\n` +
+    `/sendon /sendoff - Kontrol auto kirim\n` +
+    `/replyon /replyoff - Kontrol auto balas\n` +
+    `/stats - Statistik lengkap\n\n` +
     `*SKILL:*\n` +
     `/crypto [coin] - Harga crypto\n` +
-    `/joke - Joke random\n` +
-    `/advice - Motivasi\n` +
-    `/fact - Fakta unik\n` +
-    `/kurs [jml] [dari] [ke] - Kurs\n\n` +
+    `/joke /advice /fact\n` +
+    `/kurs [jml] [dari] [ke]\n\n` +
     `*AGENT HUB:*\n` +
     `/status /inbox /discover\n` +
-    `/send [id] [pesan]\n` +
-    `/read [id] /heartbeat`
+    `/send [id] [pesan] /read [id]`
   );
 });
 
 bot.onText(/\/help/, async () => {
   await send(
     `*Menu Lengkap:*\n\n` +
-    `*KONTROL AUTO:*\n` +
-    `/autoon - ON auto kirim+balas\n` +
-    `/autooff - OFF auto kirim+balas\n` +
-    `/stats - Statistik lengkap\n\n` +
+    `*AUTO KONTROL:*\n` +
+    `/autoon /autooff\n` +
+    `/sendon /sendoff\n` +
+    `/replyon /replyoff\n` +
+    `/stats\n\n` +
     `*SKILL:*\n` +
     `/crypto bitcoin\n` +
     `/joke /advice /fact\n` +
@@ -276,7 +298,7 @@ bot.onText(/\/status/, async () => {
 bot.onText(/\/heartbeat/, async () => {
   try {
     const data = await agentHub("POST", "/heartbeat", { supports_chat: true });
-    await send(`*Heartbeat OK!*\n\nStatus: *${data.status}*\nUnread: ${data.unread_count}\nAuto: tiap 15 detik`);
+    await send(`*Heartbeat OK!*\n\nStatus: *${data.status}*\nUnread: ${data.unread_count}\nInterval: 5 detik`);
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
@@ -324,9 +346,9 @@ bot.onText(/\/send (.+?) (.+)/, async (msg, match) => {
   const content = match[2].trim();
   try {
     const data = await agentHub("POST", "/message", { to: targetId, content });
-    await send(`*Terkirim!*\nKe: \`${targetId}\`\n"${content}"\nStatus: ${data.target_status || "sent"}`);
+    await send(`*Terkirim!*\nKe: \`${targetId}\`\n"${content}"`);
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
-console.log("Agent Student Bot FULL AUTO started!");
-send("*Agent Student FULL AUTO aktif!*\n\nAuto kirim + Auto balas tiap 15 detik.\n\n/stats untuk lihat statistik\n/autooff untuk matikan\n/help untuk menu lengkap.");
+console.log("Agent Student Bot - 5 Detik Mode started!");
+send("*Agent Student aktif - 5 Detik Mode!*\n\nAuto kirim + Auto balas tiap 5 detik.\n\n/stats - lihat statistik\n/autooff - matikan auto\n/help - menu lengkap");
