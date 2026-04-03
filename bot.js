@@ -6,6 +6,7 @@ const TG_CHAT = "6819883738";
 const API_KEY = "pk_live_0db5cf85a04646e4bb19873d";
 const AGENT_ID = "agent student-d9af9f";
 const BASE = "https://agents.pinai.tech/api";
+const WALLET = "0x45636A0F49Fe0a345542e85E60B0Fe196f14393a";
 
 const bot = new TelegramBot(TG_TOKEN, { polling: true });
 
@@ -18,30 +19,30 @@ const TARGET_AGENTS = [
   { id: "Rally-Tax-AI-d1c12e", name: "Rally Tax AI" },
 ];
 
-// ── Pesan otomatis bergiliran ───────────────────────────────
+// ── Pesan otomatis (include wallet) ────────────────────────
 const AUTO_MESSAGES = [
-  "Hello! agent student checking in. How are you?",
-  "Hi! Any interesting updates today?",
-  "Hey! agent student here. What can you do?",
-  "Good day! Share something interesting with me!",
-  "Hello again! agent student wants to learn more.",
-  "Hi there! What skills do you have today?",
-  "Hey! agent student is exploring AgentHub. Any news?",
-  "Hello! Can you share your latest skill result?",
-  "Hi! agent student is active and ready to learn!",
-  "Hey! What is new on AgentHub today?",
+  `Hello! I am agent student. If you find my skills useful, tips are welcome at ETH wallet: ${WALLET}`,
+  `Hi! agent student here exploring AgentHub. Support me: ${WALLET}`,
+  `Hey! agent student checking in. Any crypto tips? My wallet: ${WALLET}`,
+  `Good day! agent student is active. ETH payments accepted at: ${WALLET}`,
+  `Hello again! agent student wants to collaborate. Wallet: ${WALLET}`,
+  `Hi there! agent student is learning every day. Support via ETH: ${WALLET}`,
+  `Hey! agent student on AgentHub. What skills do you have today?`,
+  `Hello! Can you share your latest skill result? - agent student`,
+  `Hi! agent student is active and ready to learn!`,
+  `Hey! What is new on AgentHub today? - agent student`,
 ];
 
 // ── Auto reply messages ─────────────────────────────────────
 const AUTO_REPLIES = [
-  "Thanks for your message! agent student received it.",
-  "Hello! agent student here. Interesting message!",
-  "Got your message! agent student is learning from this.",
-  "Hi! Thanks for reaching out to agent student.",
-  "Roger that! agent student acknowledges your message.",
-  "Received! agent student is processing your info.",
-  "Thank you! agent student appreciates the interaction.",
-  "Hello back! agent student is always ready to chat.",
+  `Thanks for your message! agent student received it. Support me at: ${WALLET}`,
+  `Hello! agent student here. Interesting message! ETH tips welcome: ${WALLET}`,
+  `Got your message! agent student is learning from this.`,
+  `Hi! Thanks for reaching out to agent student.`,
+  `Roger that! agent student acknowledges your message.`,
+  `Received! agent student is processing your info.`,
+  `Thank you! agent student appreciates the interaction.`,
+  `Hello back! agent student is always ready to chat.`,
 ];
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -65,6 +66,60 @@ function randomItem(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+// ── Update deskripsi agent dengan wallet ────────────────────
+async function updateAgentDescription() {
+  try {
+    await agentHub("POST", "/register", {
+      name: "agent student",
+      description: `A smart student agent on AgentHub. Skills: crypto, education, fun, utilities. ETH Payment wallet: ${WALLET}`,
+      role: "consumer",
+      tags: ["assistant", "knowledge", "education"],
+      skills: [
+        {
+          name: "random",
+          description: "Randomly explores available agent skills for learning",
+          parameters: {
+            topic: { type: "string", description: "Topic to explore", required: false }
+          }
+        },
+        {
+          name: "crypto_tracker",
+          description: "Track live cryptocurrency prices including Bitcoin, Ethereum, Solana",
+          parameters: {
+            coin: { type: "string", description: "Coin name e.g. bitcoin, ethereum", required: true }
+          }
+        },
+        {
+          name: "fun_fact",
+          description: "Get a random fun or useless fact",
+          parameters: {
+            category: { type: "string", description: "Category: science, animals, history", required: false }
+          }
+        },
+        {
+          name: "study_helper",
+          description: "Answer educational questions and help students learn",
+          parameters: {
+            question: { type: "string", description: "Question to learn about", required: true }
+          }
+        },
+        {
+          name: "unit_converter",
+          description: "Convert between currencies, temperature, length, weight",
+          parameters: {
+            value: { type: "string", description: "Value to convert", required: true },
+            from_unit: { type: "string", description: "Original unit", required: true },
+            to_unit: { type: "string", description: "Target unit", required: true }
+          }
+        }
+      ]
+    });
+    console.log("Agent description updated with wallet address!");
+  } catch (e) {
+    console.error("Update description error:", e.message);
+  }
+}
+
 // ── State ────────────────────────────────────────────────────
 let lastUnread = 0;
 let autoSendEnabled = true;
@@ -73,16 +128,16 @@ let cycleCount = 0;
 let totalSent = 0;
 let totalReplied = 0;
 let repliedMessages = new Set();
-let isRunning = false; // cegah overlap jika proses lambat
+let isRunning = false;
 
 // ── MAIN LOOP tiap 5 detik ───────────────────────────────────
 async function mainLoop() {
-  if (isRunning) return; // skip jika cycle sebelumnya belum selesai
+  if (isRunning) return;
   isRunning = true;
   cycleCount++;
 
   try {
-    // 1. HEARTBEAT (tiap 5 detik)
+    // 1. HEARTBEAT
     const hb = await agentHub("POST", "/heartbeat", { supports_chat: true });
     const unread = hb.unread_count || 0;
     if (unread > lastUnread) {
@@ -105,7 +160,6 @@ async function mainLoop() {
           try {
             const chat = await agentHub("GET", `/messages/${encodeURIComponent(peerId)}`);
             const messages = Array.isArray(chat) ? chat : (chat.messages || []);
-
             for (const msg of messages) {
               if (msg.from !== AGENT_ID && !repliedMessages.has(msg.id)) {
                 const reply = randomItem(AUTO_REPLIES);
@@ -122,15 +176,15 @@ async function mainLoop() {
       }
     }
 
-    // 3. AUTO SEND (bergiliran tiap cycle)
+    // 3. AUTO SEND
     if (autoSendEnabled) {
       const target = TARGET_AGENTS[cycleCount % TARGET_AGENTS.length];
       const message = randomItem(AUTO_MESSAGES);
       await agentHub("POST", "/message", { to: target.id, content: message });
       totalSent++;
-      console.log(`Auto sent to ${target.name}: "${message}"`);
+      console.log(`Auto sent to ${target.name}`);
 
-      // Report ke Telegram tiap 10 cycle (50 detik)
+      // Report tiap 10 cycle
       if (cycleCount % 10 === 0) {
         await send(
           `*AUTO REPORT (tiap 50 detik)*\n\n` +
@@ -138,7 +192,8 @@ async function mainLoop() {
           `Total terkirim: ${totalSent}\n` +
           `Total dibalas: ${totalReplied}\n` +
           `Terakhir kirim ke: *${target.name}*\n` +
-          `Unread saat ini: ${lastUnread}`
+          `Unread: ${lastUnread}\n\n` +
+          `Wallet: \`${WALLET}\``
         );
       }
     }
@@ -150,9 +205,23 @@ async function mainLoop() {
   isRunning = false;
 }
 
-// Jalankan tiap 5 detik
 setInterval(mainLoop, 5000);
-mainLoop();
+
+// Update deskripsi agent saat start, lalu jalankan loop
+updateAgentDescription().then(() => {
+  mainLoop();
+});
+
+// ══ WALLET COMMAND ══════════════════════════════════════════
+bot.onText(/\/wallet/, async () => {
+  await send(
+    `*Wallet Agent Student*\n\n` +
+    `Network: Ethereum (ETH)\n` +
+    `Address:\n\`${WALLET}\`\n\n` +
+    `_Terima kasih atas dukungannya!_\n` +
+    `_Wallet ini juga tercantum di profil agent di AgentHub._`
+  );
+});
 
 // ══ SKILL COMMANDS ══════════════════════════════════════════
 
@@ -162,7 +231,7 @@ bot.onText(/\/crypto (.+)/, async (msg, match) => {
     const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin}&vs_currencies=usd,idr`);
     const data = await res.json();
     if (!data[coin]) { await send(`Coin *${coin}* tidak ditemukan.\nCoba: bitcoin, ethereum, solana`); return; }
-    await send(`*${coin.toUpperCase()} Price*\n\nUSD: $${data[coin].usd?.toLocaleString()}\nIDR: Rp${data[coin].idr?.toLocaleString()}`);
+    await send(`*${coin.toUpperCase()} Price*\n\nUSD: $${data[coin].usd?.toLocaleString()}\nIDR: Rp${data[coin].idr?.toLocaleString()}\n\n_Tips welcome: \`${WALLET}\`_`);
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
@@ -204,47 +273,31 @@ bot.onText(/\/kurs (.+) (.+) (.+)/, async (msg, match) => {
 // ══ KONTROL AUTO ════════════════════════════════════════════
 
 bot.onText(/\/autoon/, async () => {
-  autoSendEnabled = true;
-  autoReplyEnabled = true;
-  await send(`*AUTO MODE: ON*\nAuto kirim + auto balas aktif tiap *5 detik*.`);
+  autoSendEnabled = true; autoReplyEnabled = true;
+  await send(`*AUTO MODE: ON*\nAuto kirim + auto balas tiap 5 detik.`);
 });
 
 bot.onText(/\/autooff/, async () => {
-  autoSendEnabled = false;
-  autoReplyEnabled = false;
-  await send(`*AUTO MODE: OFF*\nAuto kirim + auto balas dimatikan.`);
+  autoSendEnabled = false; autoReplyEnabled = false;
+  await send(`*AUTO MODE: OFF*`);
 });
 
-bot.onText(/\/sendon/, async () => {
-  autoSendEnabled = true;
-  await send(`*AUTO SEND: ON*\nAuto kirim pesan tiap 5 detik.`);
-});
-
-bot.onText(/\/sendoff/, async () => {
-  autoSendEnabled = false;
-  await send(`*AUTO SEND: OFF*\nAuto kirim dimatikan.`);
-});
-
-bot.onText(/\/replyon/, async () => {
-  autoReplyEnabled = true;
-  await send(`*AUTO REPLY: ON*\nAuto balas pesan masuk aktif.`);
-});
-
-bot.onText(/\/replyoff/, async () => {
-  autoReplyEnabled = false;
-  await send(`*AUTO REPLY: OFF*\nAuto balas dimatikan.`);
-});
+bot.onText(/\/sendon/, async () => { autoSendEnabled = true; await send(`*AUTO SEND: ON*`); });
+bot.onText(/\/sendoff/, async () => { autoSendEnabled = false; await send(`*AUTO SEND: OFF*`); });
+bot.onText(/\/replyon/, async () => { autoReplyEnabled = true; await send(`*AUTO REPLY: ON*`); });
+bot.onText(/\/replyoff/, async () => { autoReplyEnabled = false; await send(`*AUTO REPLY: OFF*`); });
 
 bot.onText(/\/stats/, async () => {
   await send(
     `*Statistik Agent Student:*\n\n` +
-    `Cycle berjalan: ${cycleCount}\n` +
-    `Waktu aktif: ${Math.floor(cycleCount * 5 / 60)} menit\n` +
-    `Total pesan terkirim: ${totalSent}\n` +
-    `Total pesan dibalas: ${totalReplied}\n` +
+    `Cycle: ${cycleCount}\n` +
+    `Aktif: ${Math.floor(cycleCount * 5 / 60)} menit\n` +
+    `Total terkirim: ${totalSent}\n` +
+    `Total dibalas: ${totalReplied}\n` +
     `Auto send: ${autoSendEnabled ? "ON" : "OFF"}\n` +
     `Auto reply: ${autoReplyEnabled ? "ON" : "OFF"}\n` +
-    `Unread saat ini: ${lastUnread}`
+    `Unread: ${lastUnread}\n\n` +
+    `Wallet: \`${WALLET}\``
   );
 });
 
@@ -252,15 +305,16 @@ bot.onText(/\/stats/, async () => {
 
 bot.onText(/\/start/, async () => {
   await send(
-    `*Agent Student Bot - 5 Detik Mode!*\n\n` +
-    `*KONTROL AUTO:*\n` +
-    `/autoon - ON semua auto\n` +
-    `/autooff - OFF semua auto\n` +
-    `/sendon /sendoff - Kontrol auto kirim\n` +
-    `/replyon /replyoff - Kontrol auto balas\n` +
-    `/stats - Statistik lengkap\n\n` +
+    `*Agent Student Bot Aktif!*\n\n` +
+    `*WALLET:*\n` +
+    `/wallet - Info wallet pembayaran\n\n` +
+    `*AUTO KONTROL:*\n` +
+    `/autoon /autooff\n` +
+    `/sendon /sendoff\n` +
+    `/replyon /replyoff\n` +
+    `/stats\n\n` +
     `*SKILL:*\n` +
-    `/crypto [coin] - Harga crypto\n` +
+    `/crypto [coin]\n` +
     `/joke /advice /fact\n` +
     `/kurs [jml] [dari] [ke]\n\n` +
     `*AGENT HUB:*\n` +
@@ -272,26 +326,17 @@ bot.onText(/\/start/, async () => {
 bot.onText(/\/help/, async () => {
   await send(
     `*Menu Lengkap:*\n\n` +
-    `*AUTO KONTROL:*\n` +
-    `/autoon /autooff\n` +
-    `/sendon /sendoff\n` +
-    `/replyon /replyoff\n` +
-    `/stats\n\n` +
-    `*SKILL:*\n` +
-    `/crypto bitcoin\n` +
-    `/joke /advice /fact\n` +
-    `/kurs 100 USD IDR\n\n` +
-    `*AGENT HUB:*\n` +
-    `/status /inbox /discover\n` +
-    `/send [id] [pesan]\n` +
-    `/read [id] /heartbeat`
+    `*WALLET:*\n/wallet - Tampilkan wallet ETH\n\n` +
+    `*AUTO:*\n/autoon /autooff /sendon\n/sendoff /replyon /replyoff /stats\n\n` +
+    `*SKILL:*\n/crypto bitcoin\n/joke /advice /fact\n/kurs 100 USD IDR\n\n` +
+    `*AGENT HUB:*\n/status /inbox /discover\n/send [id] [pesan] /read [id]`
   );
 });
 
 bot.onText(/\/status/, async () => {
   try {
     const data = await agentHub("GET", `/agents/${encodeURIComponent(AGENT_ID)}`);
-    await send(`*Status:*\n\nID: \`${AGENT_ID}\`\nStatus: *${data.status || "unknown"}*\nRole: ${data.role || "-"}\nUnread: ${lastUnread}`);
+    await send(`*Status:*\n\nID: \`${AGENT_ID}\`\nStatus: *${data.status || "unknown"}*\nRole: ${data.role || "-"}\nUnread: ${lastUnread}\nWallet: \`${WALLET}\``);
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
@@ -345,10 +390,17 @@ bot.onText(/\/send (.+?) (.+)/, async (msg, match) => {
   const targetId = match[1].trim();
   const content = match[2].trim();
   try {
-    const data = await agentHub("POST", "/message", { to: targetId, content });
+    await agentHub("POST", "/message", { to: targetId, content });
     await send(`*Terkirim!*\nKe: \`${targetId}\`\n"${content}"`);
   } catch (e) { await send("Gagal: " + e.message); }
 });
 
-console.log("Agent Student Bot - 5 Detik Mode started!");
-send("*Agent Student aktif - 5 Detik Mode!*\n\nAuto kirim + Auto balas tiap 5 detik.\n\n/stats - lihat statistik\n/autooff - matikan auto\n/help - menu lengkap");
+console.log("Agent Student Bot started with wallet support!");
+send(
+  `*Agent Student aktif!*\n\n` +
+  `Wallet ETH terdaftar:\n\`${WALLET}\`\n\n` +
+  `Auto kirim + Auto balas tiap 5 detik.\n\n` +
+  `/wallet - Info wallet\n` +
+  `/stats - Statistik\n` +
+  `/help - Menu lengkap`
+);
